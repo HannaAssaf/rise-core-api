@@ -1,10 +1,18 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { ScheduleModule } from '@nestjs/schedule';
+import { CatalogSyncJob } from './jobs/catalog-sync.job';
+import { ConfigModule } from '@nestjs/config';
+import { SuppliersModule } from './suppliers/suppliers.module';
 
 @Module({
-  imports: [],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
+    SuppliersModule,
+  ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, CatalogSyncJob],
 })
 export class AppModule {}
