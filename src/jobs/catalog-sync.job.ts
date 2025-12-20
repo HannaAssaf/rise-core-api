@@ -13,12 +13,6 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// type MockProduct = {
-//   supplier: 'mock';
-//   supplierSku: string;
-//   name: string;
-// };
-
 @Injectable()
 export class CatalogSyncJob {
   private readonly logger = new Logger(CatalogSyncJob.name);
@@ -74,11 +68,3 @@ export class CatalogSyncJob {
     this.logger.debug(`Upsert mock: ${batch.length} items (${first}..${last})`);
   }
 }
-
-//   private async mockUpsert(batch: MockProduct[]) {
-//     // <--change later
-//     const first = batch[0]?.supplierSku;
-//     const last = batch[batch.length - 1]?.supplierSku;
-//     this.logger.debug(`Upsert mock: ${batch.length} items (${first}..${last})`);
-//   }
-// }
