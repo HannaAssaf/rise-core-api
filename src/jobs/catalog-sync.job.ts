@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { SupplierCode } from '@prisma/client';
 import {
   FarnellClient,
   SupplierProduct,
@@ -21,9 +23,10 @@ export class CatalogSyncJob {
   constructor(
     private readonly config: ConfigService,
     private readonly farnell: FarnellClient,
+    private readonly prisma: PrismaService,
   ) {}
 
-  @Cron('*/10 * * * * *') // <--change later
+  @Cron('*/10 * * * * *') // <-- change later
   async run() {
     if (this.isRunning) {
       this.logger.warn('CatalogSync skipped (already running)');
@@ -38,7 +41,7 @@ export class CatalogSyncJob {
       const batchSize = Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
 
       const products: SupplierProduct[] =
-        await this.farnell.fetchCatalogueMock(137); // <--change later
+        await this.farnell.fetchCatalogueMock(137); // <-- change later
       const batches = chunk(products, batchSize);
 
       this.logger.log(
@@ -50,8 +53,14 @@ export class CatalogSyncJob {
         this.logger.log(
           `Batch ${i + 1}/${batches.length}: ${batch.length} items`,
         );
-        await this.mockUpsert(batch);
-        await new Promise((r) => setTimeout(r, 100)); // <--change later
+
+        const upserted = await this.upsertBatch(batch);
+
+        const first = batch[0]?.supplierSku;
+        const last = batch[batch.length - 1]?.supplierSku;
+        this.logger.debug(`Upserted: ${upserted} items (${first}..${last})`);
+
+        await new Promise((r) => setTimeout(r, 100)); // <-- change later
       }
 
       this.logger.log('CatalogSync finished.');
@@ -62,9 +71,31 @@ export class CatalogSyncJob {
     }
   }
 
-  private async mockUpsert(batch: SupplierProduct[]) {
-    const first = batch[0]?.supplierSku;
-    const last = batch[batch.length - 1]?.supplierSku;
-    this.logger.debug(`Upsert mock: ${batch.length} items (${first}..${last})`);
+  private async upsertBatch(batch: SupplierProduct[]) {
+    if (!batch.length) return 0;
+
+    const supplier: SupplierCode = SupplierCode.farnell;
+
+    const ops = batch.map((p) => {
+      const supplierKey = `${supplier}:${p.supplierSku}`;
+
+      return this.prisma.product.upsert({
+        where: { supplierKey },
+        create: {
+          supplier,
+          supplierSku: p.supplierSku,
+          supplierKey,
+          name: p.name,
+          raw: JSON.parse(JSON.stringify(p)),
+        },
+        update: {
+          name: p.name,
+          raw: JSON.parse(JSON.stringify(p)),
+        },
+      });
+    });
+
+    await this.prisma.$transaction(ops);
+    return batch.length;
   }
 }
