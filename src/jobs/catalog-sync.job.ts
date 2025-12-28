@@ -7,6 +7,12 @@ import {
   FarnellClient,
   SupplierProduct,
 } from 'src/suppliers/farnell/farnell.client';
+import { Prisma } from '@prisma/client';
+
+function toInputJsonValue(input: unknown): Prisma.InputJsonValue {
+  const v = JSON.parse(JSON.stringify(input)) as unknown;
+  return (v ?? {}) as Prisma.InputJsonValue;
+}
 
 function chunk<T>(arr: T[], size: number): T[][] {
   if (!Number.isFinite(size) || size <= 0) return [arr];
@@ -26,7 +32,7 @@ export class CatalogSyncJob {
     private readonly prisma: PrismaService,
   ) {}
 
-  @Cron('*/10 * * * * *') // <-- change later
+  @Cron('*/20 * * * * *') // <-- change later
   async run() {
     if (this.isRunning) {
       this.logger.warn('CatalogSync skipped (already running)');
@@ -86,11 +92,11 @@ export class CatalogSyncJob {
           supplierSku: p.supplierSku,
           supplierKey,
           name: p.name,
-          raw: JSON.parse(JSON.stringify(p)),
+          raw: toInputJsonValue(p),
         },
         update: {
           name: p.name,
-          raw: JSON.parse(JSON.stringify(p)),
+          raw: toInputJsonValue(p),
         },
       });
     });
