@@ -88,6 +88,17 @@ export class CatalogSyncJob {
       );
 
       const products: SupplierProduct[] = [];
+      const seenSkus = new Set<string>();
+      let duplicatePagesInRow = 0;
+
+      const paginationModeEnv = (
+        this.config.get<string>('SUPPLIER_FARNELL_PAGINATION_MODE') ?? ''
+      )
+        .trim()
+        .toLowerCase();
+      let paginationMode: 'item' | 'page' =
+        paginationModeEnv === 'page' ? 'page' : 'item';
+      const allowAutoMode = !paginationModeEnv;
 
       let pageIndex = 0;
 
@@ -105,38 +116,90 @@ export class CatalogSyncJob {
         if (remaining <= 0) break;
 
         const take = Math.min(pageSizeDefault, remaining);
+        let offset =
+          paginationMode === 'item' ? pageIndex * pageSizeDefault : pageIndex;
 
-        // Farnell pagination: offset === pageIndex (NOT item offset)
-        const page = await this.fetchFarnellPageWithRetry({
+        let page = await this.fetchFarnellPageWithRetry({
           term,
-          pageIndex,
+          offset,
           take,
           attempts: 3,
         });
 
+        if (
+          allowAutoMode &&
+          page.length === 0 &&
+          paginationMode === 'item' &&
+          pageIndex > 0
+        ) {
+          this.logger.warn(
+            `Farnell empty page with item-offset=${offset}. Switching to page-index mode.`,
+          );
+          paginationMode = 'page';
+          offset = pageIndex;
+          page = await this.fetchFarnellPageWithRetry({
+            term,
+            offset,
+            take,
+            attempts: 3,
+          });
+        }
+
         this.logger.log(
-          `Fetched pageIndex=${pageIndex} got=${page.length} uniqueSkus=${
+          `Fetched pageIndex=${pageIndex} offset=${offset} mode=${paginationMode} got=${page.length} uniqueSkus=${
             new Set(page.map((x) => x.supplierSku)).size
           } first=${page[0]?.supplierSku} last=${page.at(-1)?.supplierSku}`,
         );
 
         if (page.length === 0) break;
 
-        products.push(...page);
+        let added = 0;
+        let dupes = 0;
+        for (const p of page) {
+          if (seenSkus.has(p.supplierSku)) {
+            dupes += 1;
+            continue;
+          }
+          seenSkus.add(p.supplierSku);
+          products.push(p);
+          added += 1;
+        }
+        const isFullDuplicate = dupes === page.length;
+
+        if (isFullDuplicate) {
+          duplicatePagesInRow += 1;
+          pageIndex += 1;
+
+          if (duplicatePagesInRow >= 2) {
+            this.logger.warn(
+              `Farnell duplicate pages in a row=${duplicatePagesInRow}. Stopping pagination.`,
+            );
+            break;
+          }
+
+          continue;
+        }
+
+        duplicatePagesInRow = 0;
         pageIndex += 1;
+
+        if (dupes > 0) {
+          this.logger.warn(
+            `Farnell page duplicates pageIndex=${pageIndex - 1} dupes=${dupes}`,
+          );
+        }
+
+        this.logger.log(
+          `Farnell page added=${added} totalUnique=${products.length}`,
+        );
 
         await new Promise((r) => setTimeout(r, pageDelayMs));
       }
 
-      // De-dup by supplierSku (Farnell sometimes repeats)
-      const uniq = new Map<string, SupplierProduct>();
-      for (const p of products) uniq.set(p.supplierSku, p);
-      const uniqueProducts = [...uniq.values()];
-
-      const batches = chunk(uniqueProducts, batchSize);
+      const batches = chunk(products, batchSize);
 
       this.logger.log(
-        `CatalogSync started. supplier=farnell total=${uniqueProducts.length} raw=${products.length} batchSize=${batchSize} batches=${batches.length}`,
+        `CatalogSync started. supplier=farnell total=${products.length} batchSize=${batchSize} batches=${batches.length}`,
       );
 
       for (let i = 0; i < batches.length; i++) {
@@ -164,7 +227,7 @@ export class CatalogSyncJob {
 
   private async fetchFarnellPageWithRetry(args: {
     term: string;
-    pageIndex: number;
+    offset: number;
     take: number;
     attempts?: number;
   }): Promise<SupplierProduct[]> {
@@ -174,14 +237,14 @@ export class CatalogSyncJob {
       try {
         return await this.farnell.searchProducts({
           term: args.term,
-          offset: args.pageIndex,
+          offset: args.offset,
           numberOfResults: args.take,
           responseGroup: 'large',
         });
       } catch (e) {
         const msg = (e as Error).message ?? String(e);
         this.logger.warn(
-          `Farnell page failed pageIndex=${args.pageIndex} take=${args.take} attempt=${i}/${attempts}: ${msg}`,
+          `Farnell page failed offset=${args.offset} take=${args.take} attempt=${i}/${attempts}: ${msg}`,
         );
 
         if (i === attempts) throw e;

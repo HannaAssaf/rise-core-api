@@ -58,9 +58,15 @@ export class FarnellClient {
     const offset = opts.offset ?? 0;
     const numberOfResults = opts.numberOfResults ?? 50;
     const responseGroup = opts.responseGroup ?? 'large';
+    const versionNumberRaw =
+      this.config.get<string>('SUPPLIER_FARNELL_VERSION') ?? '1.4';
+    const versionNumber = versionNumberRaw.trim();
 
     const url = new URL(this.buildBaseUrl());
 
+    if (versionNumber) {
+      url.searchParams.set('versionNumber', versionNumber);
+    }
     url.searchParams.set('term', opts.term);
     url.searchParams.set('storeInfo.id', storeId);
 
@@ -90,6 +96,9 @@ export class FarnellClient {
     const obj = isRecord(json) ? json : null;
     const container =
       (obj && isRecord(obj.keywordSearchReturn) && obj.keywordSearchReturn) ||
+      (obj &&
+        isRecord(obj.manufacturerPartNumberSearchReturn) &&
+        obj.manufacturerPartNumberSearchReturn) ||
       (obj &&
         isRecord(obj.manufacturerPartNumberReturn) &&
         obj.manufacturerPartNumberReturn) ||
