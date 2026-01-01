@@ -205,6 +205,23 @@ export class FarnellClient {
 
         if (!res.ok) {
           const text = await res.text().catch(() => '');
+          const lower = text.toLowerCase();
+          const isRateLimit403 =
+            res.status === 403 &&
+            (lower.includes('rate limit') ||
+              lower.includes('queries per second'));
+
+          if (isRateLimit403) {
+            const waitMs = Math.min(delayMs * 2, 15_000);
+            this.logger.warn(
+              `Farnell 403 rate-limit. wait=${waitMs}ms attempt=${attempt}/${maxAttempts}`,
+            );
+            await new Promise((r) => setTimeout(r, waitMs));
+            delayMs = Math.min(delayMs * 2, 10_000);
+
+            if (attempt < maxAttempts) continue;
+          }
+
           throw new Error(`Farnell HTTP ${res.status}. ${text.slice(0, 300)}`);
         }
 
