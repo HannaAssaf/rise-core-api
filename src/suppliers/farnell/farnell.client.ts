@@ -17,6 +17,15 @@ export type SupplierProduct = {
   raw?: unknown;
 };
 
+export class FarnellRateLimitError extends Error {
+  readonly status = 403;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'FarnellRateLimitError';
+  }
+}
+
 type FarnellSearchOptions = {
   term: string;
   offset?: number;
@@ -220,6 +229,10 @@ export class FarnellClient {
             delayMs = Math.min(delayMs * 2, 10_000);
 
             if (attempt < maxAttempts) continue;
+
+            throw new FarnellRateLimitError(
+              `Farnell HTTP ${res.status}. ${text.slice(0, 300)}`,
+            );
           }
 
           throw new Error(`Farnell HTTP ${res.status}. ${text.slice(0, 300)}`);

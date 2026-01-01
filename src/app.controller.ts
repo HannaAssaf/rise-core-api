@@ -1,7 +1,10 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { AppService } from './app.service';
 import { CatalogSyncJob } from './jobs/catalog-sync.job';
-import { FarnellClient } from './suppliers/farnell/farnell.client';
+import {
+  FarnellClient,
+  FarnellRateLimitError,
+} from './suppliers/farnell/farnell.client';
 import { PrismaService } from './prisma/prisma.service';
 import { Prisma, SupplierCode } from '@prisma/client';
 
@@ -85,12 +88,23 @@ export class AppController {
     }
 
     const termResolved = buildFarnellTerm({ q: query }) ?? `any:${query}`;
-    const items = await this.farnellClient.searchProducts({
-      term: termResolved,
-      offset: 0,
-      numberOfResults: safeLimit,
-      responseGroup: 'large',
-    });
+    let items: { supplierSku: string; name: string; raw?: unknown }[] = [];
+    let rateLimited = false;
+
+    try {
+      items = await this.farnellClient.searchProducts({
+        term: termResolved,
+        offset: 0,
+        numberOfResults: safeLimit,
+        responseGroup: 'large',
+      });
+    } catch (err) {
+      if (err instanceof FarnellRateLimitError) {
+        rateLimited = true;
+      } else {
+        throw err;
+      }
+    }
 
     if (items.length === 0) {
       const result = {
@@ -98,6 +112,7 @@ export class AppController {
         count: 0,
         items: [],
         term: termResolved,
+        ...(rateLimited ? { rateLimited: true } : {}),
       };
       this.setSearchCache(cacheKey, result);
       return result;
@@ -139,6 +154,7 @@ export class AppController {
       count: savedItems.length,
       items: savedItems,
       term: termResolved,
+      ...(rateLimited ? { rateLimited: true } : {}),
     };
     this.setSearchCache(cacheKey, result);
     return result;
@@ -378,6 +394,7 @@ type SearchCatalogResponse = {
   count: number;
   items: unknown[];
   term?: string;
+  rateLimited?: boolean;
 };
 
 type SearchCacheEntry = {
