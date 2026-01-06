@@ -205,13 +205,19 @@ export class AppController {
     item?: unknown;
     description?: string | null;
     attributes?: Array<{ label: string; value: string; unit?: string }>;
+    images?: { main?: string; thumb?: string };
+    datasheets?: Array<{ type?: string; description?: string; url?: string }>;
+    prices?: Array<{ from?: number; to?: number; cost?: number }>;
+    stock?: { level?: number; status?: number; leastLeadTime?: number };
+    productUrl?: string | null;
+    brandName?: string | null;
     term?: string;
     rateLimited?: boolean;
   }> {
     const sku = supplierSku?.trim();
     if (!sku) return { source: 'empty' };
 
-    const shouldRefresh = parseBoolean(refresh);
+    const shouldRefresh = refresh === undefined ? true : parseBoolean(refresh);
     let item = await this.prisma.product.findFirst({
       where: { supplier: SupplierCode.farnell, supplierSku: sku },
     });
@@ -257,6 +263,12 @@ export class AppController {
         item,
         description: extractFarnellDescription(item.raw),
         attributes: extractFarnellAttributes(item.raw),
+        images: extractFarnellImages(item.raw),
+        datasheets: extractFarnellDatasheets(item.raw),
+        prices: extractFarnellPrices(item.raw),
+        stock: extractFarnellStock(item.raw),
+        productUrl: extractFarnellProductUrl(item.raw),
+        brandName: extractFarnellBrandName(item.raw),
         term: termResolved,
         ...(rateLimited ? { rateLimited: true } : {}),
       };
@@ -267,6 +279,12 @@ export class AppController {
       item,
       description: extractFarnellDescription(item.raw),
       attributes: extractFarnellAttributes(item.raw),
+      images: extractFarnellImages(item.raw),
+      datasheets: extractFarnellDatasheets(item.raw),
+      prices: extractFarnellPrices(item.raw),
+      stock: extractFarnellStock(item.raw),
+      productUrl: extractFarnellProductUrl(item.raw),
+      brandName: extractFarnellBrandName(item.raw),
     };
   }
 
@@ -702,4 +720,131 @@ function extractFarnellAttributes(
       return { label, value, ...(unit ? { unit } : {}) };
     })
     .filter(isNotNull);
+}
+
+function extractFarnellImages(
+  raw: unknown,
+): { main?: string; thumb?: string } | undefined {
+  if (!isRecord(raw)) return undefined;
+  const image = raw.image;
+  if (!isRecord(image)) return undefined;
+
+  const main =
+    asString(image.mainImageURL) ??
+    asString(image.mainImageUrl) ??
+    asString(image.mainImage);
+  const thumb =
+    asString(image.thumbNailImageURL) ??
+    asString(image.thumbnailImageURL) ??
+    asString(image.thumbnailImageUrl) ??
+    asString(image.thumbNailImageUrl) ??
+    asString(image.thumbNailImage) ??
+    asString(image.thumbnailImage);
+
+  if (!main && !thumb) return undefined;
+  return { ...(main ? { main } : {}), ...(thumb ? { thumb } : {}) };
+}
+
+function extractFarnellDatasheets(
+  raw: unknown,
+): Array<{ type?: string; description?: string; url?: string }> {
+  if (!isRecord(raw)) return [];
+  const dsRaw = raw.datasheets;
+  const list = Array.isArray(dsRaw)
+    ? dsRaw
+    : isRecord(dsRaw) && Array.isArray(dsRaw.datasheet)
+      ? dsRaw.datasheet
+      : [];
+
+  return list
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      const type = asString(entry.type);
+      const description = asString(entry.description);
+      const url = asString(entry.url);
+      if (!type && !description && !url) return null;
+      return {
+        ...(type ? { type } : {}),
+        ...(description ? { description } : {}),
+        ...(url ? { url } : {}),
+      };
+    })
+    .filter(isNotNull);
+}
+
+function extractFarnellPrices(
+  raw: unknown,
+): Array<{ from?: number; to?: number; cost?: number }> {
+  if (!isRecord(raw)) return [];
+  const pricesRaw = raw.prices;
+  const list = Array.isArray(pricesRaw)
+    ? pricesRaw
+    : isRecord(pricesRaw) && Array.isArray(pricesRaw.price)
+      ? pricesRaw.price
+      : [];
+
+  return list
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      const from = toNumber(entry.from);
+      const to = toNumber(entry.to);
+      const cost = toNumber(entry.cost);
+      if (from === undefined && to === undefined && cost === undefined) {
+        return null;
+      }
+      return {
+        ...(from !== undefined ? { from } : {}),
+        ...(to !== undefined ? { to } : {}),
+        ...(cost !== undefined ? { cost } : {}),
+      };
+    })
+    .filter(isNotNull);
+}
+
+function extractFarnellStock(
+  raw: unknown,
+): { level?: number; status?: number; leastLeadTime?: number } | undefined {
+  if (!isRecord(raw)) return undefined;
+  const stock = raw.stock;
+  if (!isRecord(stock)) return undefined;
+
+  const level = toNumber(stock.level);
+  const status = toNumber(stock.status);
+  const leastLeadTime = toNumber(stock.leastLeadTime);
+
+  if (
+    level === undefined &&
+    status === undefined &&
+    leastLeadTime === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(level !== undefined ? { level } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(leastLeadTime !== undefined ? { leastLeadTime } : {}),
+  };
+}
+
+function extractFarnellProductUrl(raw: unknown): string | null {
+  if (!isRecord(raw)) return null;
+  return asString(raw.productURL) ?? asString(raw.productUrl) ?? null;
+}
+
+function extractFarnellBrandName(raw: unknown): string | null {
+  if (!isRecord(raw)) return null;
+  return (
+    asString(raw.brandName) ??
+    (isRecord(raw.brand) ? asString(raw.brand.name) : null) ??
+    null
+  );
+}
+
+function toNumber(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
 }
