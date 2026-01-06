@@ -258,8 +258,12 @@ export class CatalogSyncJob {
     if (!batch.length) return 0;
 
     const supplier: SupplierCode = SupplierCode.farnell;
+    const txBatchSize = toPositiveInt(
+      this.config.get('CATALOG_SYNC_TX_BATCH_SIZE'),
+      10,
+    );
 
-    const ops = batch.map((p) => {
+    const buildUpsert = (p: SupplierProduct) => {
       const supplierKey = `${supplier}:${p.supplierSku}`;
 
       return this.prisma.product.upsert({
@@ -276,9 +280,27 @@ export class CatalogSyncJob {
           raw: toInputJsonValue(p.raw ?? p),
         },
       });
-    });
+    };
 
-    await this.prisma.$transaction(ops);
-    return batch.length;
+    let total = 0;
+
+    for (const txBatch of chunk(batch, txBatchSize)) {
+      try {
+        await this.prisma.$transaction(txBatch.map(buildUpsert));
+        total += txBatch.length;
+      } catch (e) {
+        const msg = (e as Error).message ?? String(e);
+        this.logger.warn(
+          `Upsert transaction failed (size=${txBatch.length}). Falling back to sequential. ${msg}`,
+        );
+
+        for (const p of txBatch) {
+          await buildUpsert(p);
+          total += 1;
+        }
+      }
+    }
+
+    return total;
   }
 }
