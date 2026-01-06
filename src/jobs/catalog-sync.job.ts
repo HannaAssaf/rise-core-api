@@ -37,9 +37,8 @@ export class CatalogSyncJob {
     private readonly prisma: PrismaService,
   ) {}
 
-  // ⚠️ For dev: every minute.
-  // For prod, usually: '0 */6 * * *' (every 6 hours) or nightly.
-  @Cron('*/1 * * * *')
+  // Default: nightly at 02:00; override with CATALOG_SYNC_CRON env var.
+  @Cron(process.env.CATALOG_SYNC_CRON ?? '0 2 * * *')
   async run() {
     if (this.isRunning) {
       this.logger.warn('CatalogSync skipped (already running)');
