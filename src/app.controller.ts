@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { AppService } from './app.service';
 import { CatalogSyncJob } from './jobs/catalog-sync.job';
 import {
@@ -193,6 +193,80 @@ export class AppController {
       limit: safeLimit,
       offset: safeOffset,
       items,
+    };
+  }
+
+  @Get('/products/:supplierSku')
+  async getProduct(
+    @Param('supplierSku') supplierSku: string,
+    @Query('refresh') refresh?: string,
+  ): Promise<{
+    source: 'local' | 'farnell' | 'empty';
+    item?: unknown;
+    description?: string | null;
+    attributes?: Array<{ label: string; value: string; unit?: string }>;
+    term?: string;
+    rateLimited?: boolean;
+  }> {
+    const sku = supplierSku?.trim();
+    if (!sku) return { source: 'empty' };
+
+    const shouldRefresh = parseBoolean(refresh);
+    let item = await this.prisma.product.findFirst({
+      where: { supplier: SupplierCode.farnell, supplierSku: sku },
+    });
+
+    if (!item || shouldRefresh) {
+      const termResolved = buildFarnellTerm({ id: sku }) ?? `id:${sku}`;
+      let fetched: { supplierSku: string; name: string; raw?: unknown }[] = [];
+      let rateLimited = false;
+
+      try {
+        fetched = await this.farnellClient.searchProducts({
+          term: termResolved,
+          offset: 0,
+          numberOfResults: 1,
+          responseGroup: 'large',
+        });
+      } catch (err) {
+        if (err instanceof FarnellRateLimitError) {
+          rateLimited = true;
+        } else {
+          throw err;
+        }
+      }
+
+      if (fetched.length > 0) {
+        await this.upsertFarnellProducts(fetched);
+        const supplierKey = `${SupplierCode.farnell}:${fetched[0].supplierSku}`;
+        item = await this.prisma.product.findUnique({
+          where: { supplierKey },
+        });
+      }
+
+      if (!item) {
+        return {
+          source: 'empty',
+          term: termResolved,
+          ...(rateLimited ? { rateLimited: true } : {}),
+        };
+      }
+
+      return {
+        source: 'farnell',
+        item,
+        description: extractFarnellDescription(item.raw),
+        attributes: extractFarnellAttributes(item.raw),
+        term: termResolved,
+        ...(rateLimited ? { rateLimited: true } : {}),
+      };
+    }
+
+    return {
+      source: 'local',
+      item,
+      description: extractFarnellDescription(item.raw),
+      attributes: extractFarnellAttributes(item.raw),
     };
   }
 
@@ -577,4 +651,55 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v : undefined;
+}
+
+function isNotNull<T>(v: T | null): v is T {
+  return v !== null;
+}
+
+function extractFarnellDescription(raw: unknown): string | null {
+  if (!isRecord(raw)) return null;
+
+  const direct =
+    asString(raw.longDescription) ??
+    asString(raw.shortDescription) ??
+    asString(raw.description) ??
+    asString(raw.productDescription);
+  if (direct) return direct;
+
+  const overview = raw.productOverview;
+  if (isRecord(overview)) {
+    const fromOverview =
+      asString(overview.description) ??
+      asString(overview.shortDescription) ??
+      asString(overview.longDescription) ??
+      asString(overview.alsoKnownAs);
+    if (fromOverview) return fromOverview;
+  }
+
+  return asString(raw.displayName) ?? asString(raw.name) ?? null;
+}
+
+function extractFarnellAttributes(
+  raw: unknown,
+): Array<{ label: string; value: string; unit?: string }> {
+  if (!isRecord(raw)) return [];
+
+  const attrsRaw = raw.attributes;
+  const list = Array.isArray(attrsRaw)
+    ? attrsRaw
+    : isRecord(attrsRaw) && Array.isArray(attrsRaw.attribute)
+      ? attrsRaw.attribute
+      : [];
+
+  return list
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      const label = asString(entry.attributeLabel);
+      const value = asString(entry.attributeValue);
+      const unit = asString(entry.attributeUnit);
+      if (!label || !value) return null;
+      return { label, value, ...(unit ? { unit } : {}) };
+    })
+    .filter(isNotNull);
 }
