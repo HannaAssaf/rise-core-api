@@ -160,6 +160,42 @@ export class AppController {
     return result;
   }
 
+  @Get('/products')
+  async listProducts(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<{
+    count: number;
+    total: number;
+    limit: number;
+    offset: number;
+    items: unknown[];
+  }> {
+    const safeLimit = Number.isFinite(Number(limit))
+      ? Math.max(1, Math.min(15, Math.floor(Number(limit))))
+      : 15;
+    const safeOffset = Number.isFinite(Number(offset))
+      ? Math.max(0, Math.floor(Number(offset)))
+      : 0;
+
+    const [total, items] = await Promise.all([
+      this.prisma.product.count(),
+      this.prisma.product.findMany({
+        take: safeLimit,
+        skip: safeOffset,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    return {
+      count: items.length,
+      total,
+      limit: safeLimit,
+      offset: safeOffset,
+      items,
+    };
+  }
+
   @Get('/admin/farnell/search')
   async searchFarnell(
     @Query('term') term?: string,
